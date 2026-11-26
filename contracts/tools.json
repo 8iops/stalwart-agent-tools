@@ -1,0 +1,80 @@
+{
+  "schemaVersion": "stalwart-agent-tools.re8ch.com/tool-catalog-v1alpha1",
+  "operations": [
+    {
+      "id": "mail.query",
+      "surface": "user",
+      "scope": "mail.read",
+      "mode": "read",
+      "providerMethods": ["Mailbox/get", "Email/query", "Email/get"],
+      "requires": ["binding", "resource-ownership"]
+    },
+    {
+      "id": "mail.read",
+      "surface": "user",
+      "scope": "mail.read",
+      "mode": "read",
+      "providerMethods": ["Email/get"],
+      "requires": ["binding", "resource-ownership"]
+    },
+    {
+      "id": "mail.send",
+      "surface": "user",
+      "scope": "mail.send",
+      "mode": "write",
+      "providerMethods": ["Identity/get", "Email/set", "EmailSubmission/set"],
+      "requires": ["binding", "resource-ownership", "preview", "expected-state", "idempotency", "read-back"],
+      "outcome": "provider-submitted"
+    },
+    {
+      "id": "calendar.query",
+      "surface": "user",
+      "scope": "calendar.read",
+      "mode": "read",
+      "providerMethods": ["Calendar/get", "CalendarEvent/query", "CalendarEvent/get"],
+      "requires": ["binding", "resource-ownership"]
+    },
+    {
+      "id": "calendar.respond",
+      "surface": "user",
+      "scope": "calendar.respond",
+      "mode": "write",
+      "providerMethods": ["ParticipantIdentity/get", "CalendarEvent/get", "CalendarEvent/set"],
+      "requires": ["binding", "resource-ownership", "preview", "expected-state", "idempotency", "read-back"],
+      "outcome": "provider-submitted"
+    },
+    {
+      "id": "contacts.query",
+      "surface": "user",
+      "scope": "contacts.read",
+      "mode": "read",
+      "providerMethods": ["AddressBook/get", "ContactCard/query", "ContactCard/get"],
+      "requires": ["binding", "resource-ownership"]
+    },
+    {
+      "id": "files.read",
+      "surface": "user",
+      "scope": "files.read",
+      "mode": "read",
+      "providerMethods": ["DAV:PROPFIND", "DAV:GET"],
+      "requires": ["binding", "resource-ownership", "same-origin"]
+    },
+    {
+      "id": "organization.accounts.plan",
+      "surface": "organization",
+      "scope": "stalwart.organization.accounts",
+      "mode": "read",
+      "providerMethods": ["Account/get", "Account/query"],
+      "requires": ["tenant-operator", "service-instance"]
+    },
+    {
+      "id": "platform.configuration.reload",
+      "surface": "platform",
+      "scope": "stalwart.platform.configuration",
+      "mode": "write",
+      "providerMethods": ["Action/ReloadSettings"],
+      "requires": ["platform-admin", "preview", "expected-state", "idempotency", "read-back"],
+      "outcome": "effective-state-verified"
+    }
+  ]
+}

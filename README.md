@@ -19,5 +19,20 @@ deployment desired state belongs to `8iops/agent-gitops`.
 
 The initial machine-readable boundary is [`contracts/provider.json`](contracts/provider.json).
 
+## Development
+
+```sh
+gofmt -w .
+go vet ./...
+go test ./...
+go run ./cmd/contractlint
+```
+
+Add capabilities through [`contracts/tools.json`](contracts/tools.json), not by
+accepting method names or provider URLs from callers. The catalog validator
+requires every write to declare preview, idempotency, state-precondition, and
+read-back behavior. See [`CONTRIBUTING.md`](CONTRIBUTING.md) and
+[`docs/testing.md`](docs/testing.md).
+
 Initial delivery is tracked in
 [8iops/stalwart-agent-tools#1](https://github.com/8iops/stalwart-agent-tools/issues/1).

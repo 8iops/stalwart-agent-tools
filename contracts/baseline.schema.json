@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stalwart-agent-tools.re8ch.com/baseline.schema.json",
+  "title": "Stalwart provider compatibility baseline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "providerImageDigest",
+    "reportedVersion",
+    "jmapCapabilities",
+    "managementObjects",
+    "permissions",
+    "activationClasses"
+  ],
+  "properties": {
+    "providerImageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "reportedVersion": {"type": "string", "minLength": 1},
+    "jmapCapabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "managementObjects": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "permissions": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "activationClasses": {
+      "type": "object",
+      "additionalProperties": {
+        "enum": ["immediate", "reload-settings", "invalidate-caches", "reload-tls", "rolling-restart-required"]
+      }
+    }
+  }
+}

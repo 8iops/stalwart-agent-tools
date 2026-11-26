@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "stalwart-agent-tools.re8ch.com/v1alpha1",
+  "provider": "stalwart",
+  "serviceClass": "collaboration.stalwart.v1",
+  "sourceRepository": "https://github.com/8iops/stalwart-agent-tools",
+  "deliveryRepository": "https://github.com/8iops/agent-gitops",
+  "runtime": {
+    "aggregation": "connectool-vmcp",
+    "isolation": "toolhive-mcpserver",
+    "providerPlacement": "re8ch-atlantic",
+    "consumerPlacement": "re8ch",
+    "defaultTransport": "public-edge",
+    "providerOrigins": [
+      "https://id.re8ch.com",
+      "https://mail.re8ch.com"
+    ]
+  },
+  "authority": {
+    "tenantControl": "re8ch/service-backend",
+    "providerProtocol": "8iops/stalwart-agent-tools",
+    "agentDelivery": "8iops/agent-gitops",
+    "dynamicState": "service-instance-and-provider-api"
+  },
+  "surfaces": [
+    {
+      "id": "user",
+      "bindingRequired": true,
+      "scopeRequired": true,
+      "operations": ["mail", "calendar", "contacts", "files", "sieve", "account"]
+    },
+    {
+      "id": "organization",
+      "bindingRequired": false,
+      "scopeRequired": true,
+      "operations": ["accounts", "groups", "mailing-lists", "roles", "quotas", "sharing"]
+    },
+    {
+      "id": "platform",
+      "bindingRequired": false,
+      "scopeRequired": true,
+      "operations": ["domains", "delivery", "reports", "tasks", "configuration", "backup"]
+    }
+  ],
+  "activationClasses": [
+    "immediate",
+    "reload-settings",
+    "invalidate-caches",
+    "reload-tls",
+    "rolling-restart-required"
+  ],
+  "prohibitedInterfaces": [
+    "arbitrary-jmap-method",
+    "arbitrary-dav-url",
+    "arbitrary-management-object",
+    "arbitrary-command-arguments",
+    "provider-credential-return",
+    "kubernetes-proxy-through-amongcluster"
+  ],
+  "gitopsExcludes": [
+    "service-instances",
+    "user-bindings",
+    "provider-tokens",
+    "message-content",
+    "provider-method-schemas",
+    "account-specific-state"
+  ]
+}

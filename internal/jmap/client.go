@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -16,7 +18,10 @@ import (
 const (
 	defaultMaxRequestBytes  = 1 << 20
 	defaultMaxResponseBytes = 4 << 20
+	maxBatchCalls           = 16
 )
+
+var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type Config struct {
 	Origin           string
@@ -70,8 +75,30 @@ type methodResponse struct {
 }
 
 type ProtocolError struct {
-	Type        string
-	Description string
+	Type        string `json:"type"`
+	Description string `json:"description"`
+}
+
+type BatchCall struct {
+	ID               string
+	Capability       string
+	Method           string
+	Arguments        any
+	ResultReferences []ResultReference
+}
+
+type ResultReference struct {
+	Argument string
+	ResultOf string
+	Name     string
+	Path     string
+}
+
+type BatchResult struct {
+	ID     string
+	Method string
+	Result json.RawMessage
+	Error  *ProtocolError
 }
 
 func (e *ProtocolError) Error() string {
@@ -168,19 +195,52 @@ func (c *Client) Discover(ctx context.Context) (Session, error) {
 }
 
 func (c *Client) Call(ctx context.Context, capability, method string, arguments any) (json.RawMessage, error) {
+	results, err := c.CallBatch(ctx, []BatchCall{{ID: "c1", Capability: capability, Method: method, Arguments: arguments}})
+	if err != nil {
+		return nil, err
+	}
+	if results[0].Error != nil {
+		return nil, results[0].Error
+	}
+	return results[0].Result, nil
+}
+
+func (c *Client) CallBatch(ctx context.Context, calls []BatchCall) ([]BatchResult, error) {
 	if c.session == nil {
 		return nil, errors.New("JMAP session discovery is required")
 	}
-	if _, ok := c.session.Capabilities[capability]; !ok {
-		return nil, fmt.Errorf("provider capability %q is unavailable", capability)
+	if len(calls) == 0 || len(calls) > maxBatchCalls {
+		return nil, fmt.Errorf("JMAP batch must contain between 1 and %d calls", maxBatchCalls)
 	}
-	methods, ok := c.allowedMethods[capability]
-	if !ok || !methods[method] {
-		return nil, fmt.Errorf("provider method %q is not registered for capability", method)
+	using := []string{"urn:ietf:params:jmap:core"}
+	seenCapabilities := map[string]bool{"urn:ietf:params:jmap:core": true}
+	seenCalls := make(map[string]string, len(calls))
+	methodCalls := make([]any, 0, len(calls))
+	for _, call := range calls {
+		if !identifierPattern.MatchString(call.ID) || seenCalls[call.ID] != "" {
+			return nil, errors.New("JMAP batch call ids must be unique bounded identifiers")
+		}
+		if _, ok := c.session.Capabilities[call.Capability]; !ok {
+			return nil, fmt.Errorf("provider capability %q is unavailable", call.Capability)
+		}
+		methods, ok := c.allowedMethods[call.Capability]
+		if !ok || !methods[call.Method] {
+			return nil, fmt.Errorf("provider method %q is not registered for capability", call.Method)
+		}
+		arguments, err := encodeArguments(call.Arguments, call.ResultReferences, seenCalls)
+		if err != nil {
+			return nil, fmt.Errorf("encode JMAP call %q: %w", call.ID, err)
+		}
+		seenCalls[call.ID] = call.Method
+		if !seenCapabilities[call.Capability] {
+			using = append(using, call.Capability)
+			seenCapabilities[call.Capability] = true
+		}
+		methodCalls = append(methodCalls, []any{call.Method, arguments, call.ID})
 	}
 	payload, err := json.Marshal(callRequest{
-		Using:       []string{"urn:ietf:params:jmap:core", capability},
-		MethodCalls: []any{[]any{method, arguments, "c1"}},
+		Using:       using,
+		MethodCalls: methodCalls,
 	})
 	if err != nil {
 		return nil, errors.New("encode typed JMAP request")
@@ -193,30 +253,70 @@ func (c *Client) Call(ctx context.Context, capability, method string, arguments 
 		return nil, fmt.Errorf("call JMAP provider: %w", err)
 	}
 	var response callResponse
-	if err = json.Unmarshal(body, &response); err != nil || len(response.MethodResponses) != 1 {
+	if err = json.Unmarshal(body, &response); err != nil || len(response.MethodResponses) != len(calls) {
 		return nil, errors.New("provider returned an invalid JMAP response")
 	}
-	result, err := parseMethodResponse(response.MethodResponses[0])
+	results := make([]BatchResult, 0, len(calls))
+	responded := make(map[string]bool, len(calls))
+	for index, raw := range response.MethodResponses {
+		response, parseErr := parseMethodResponse(raw)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		call := calls[index]
+		if response.CallID != call.ID || responded[response.CallID] {
+			return nil, errors.New("provider returned an unexpected JMAP call order or id")
+		}
+		responded[response.CallID] = true
+		result := BatchResult{ID: call.ID, Method: call.Method, Result: response.Result}
+		if response.Name == "error" {
+			var providerError ProtocolError
+			if json.Unmarshal(response.Result, &providerError) != nil || providerError.Type == "" {
+				return nil, errors.New("provider returned an invalid JMAP method error")
+			}
+			result.Result = nil
+			result.Error = &providerError
+		} else if response.Name != call.Method {
+			return nil, errors.New("provider returned an unexpected JMAP method")
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func encodeArguments(arguments any, references []ResultReference, priorCalls map[string]string) (map[string]json.RawMessage, error) {
+	encoded, err := json.Marshal(arguments)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("encode typed JMAP request")
 	}
-	if result.CallID != "c1" {
-		return nil, errors.New("provider returned an unexpected JMAP call id")
+	var object map[string]json.RawMessage
+	if json.Unmarshal(encoded, &object) != nil || object == nil {
+		return nil, errors.New("JMAP arguments must encode as an object")
 	}
-	if result.Name == "error" {
-		var providerError struct {
-			Type        string `json:"type"`
-			Description string `json:"description"`
+	for _, reference := range references {
+		method, exists := priorCalls[reference.ResultOf]
+		if !identifierPattern.MatchString(reference.Argument) || !exists || reference.Name != method || !validResultPath(reference.Path) {
+			return nil, errors.New("invalid JMAP result reference")
 		}
-		if json.Unmarshal(result.Result, &providerError) != nil || providerError.Type == "" {
-			return nil, errors.New("provider returned an invalid JMAP method error")
+		key := "#" + reference.Argument
+		if _, exists = object[key]; exists {
+			return nil, errors.New("duplicate JMAP result reference argument")
 		}
-		return nil, &ProtocolError{Type: providerError.Type, Description: providerError.Description}
+		value, marshalErr := json.Marshal(map[string]string{"resultOf": reference.ResultOf, "name": reference.Name, "path": reference.Path})
+		if marshalErr != nil {
+			return nil, errors.New("encode JMAP result reference")
+		}
+		object[key] = value
 	}
-	if result.Name != method {
-		return nil, errors.New("provider returned an unexpected JMAP method")
+	return object, nil
+}
+
+func validResultPath(path string) bool {
+	if len(path) < 2 || len(path) > 512 || path[0] != '/' || strings.ContainsAny(path, "\r\n") {
+		return false
 	}
-	return result.Result, nil
+	segments := strings.Split(path[1:], "/")
+	return !slices.Contains(segments, "")
 }
 
 func parseMethodResponse(raw json.RawMessage) (methodResponse, error) {

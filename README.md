@@ -42,8 +42,9 @@ Initial delivery is tracked in
 `cmd/stalwart-agent-tools` serves stateless Streamable HTTP MCP at `/mcp` and
 health endpoints at `/healthz` and `/readyz`. It requires:
 
-- `BINDING_BROKER_URL`: the reviewed HTTPS
-  `/v1/collaboration/resolve` endpoint;
+- `BINDING_BROKER_URL`: the reviewed HTTPS endpoint, or the exact
+  `tenant-api.tenant-infrastructure.svc.cluster.local` in-cluster broker, at
+  `/v1/collaboration/resolve`;
 - optional `BINDING_BROKER_TOKEN_FILE`, defaulting to the rotating projected
   ServiceAccount token at `/var/run/secrets/tokens/stalwart-binding-broker`;
 - optional `LISTEN_ADDRESS`, defaulting to `:8080`.

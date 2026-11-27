@@ -15,6 +15,9 @@ func TestListAndReadStayInsideAuthorizedRoot(t *testing.T) {
 			t.Fatal("credential missing")
 		}
 		switch r.Method + " " + r.URL.Path {
+		case "PROPFIND /dav/file/":
+			w.Header().Set("Content-Type", "application/xml")
+			fmt.Fprintf(w, `<d:multistatus xmlns:d="DAV:"><d:response><d:href>%s/dav/file/</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop><d:current-user-principal><d:href>/dav/pal/user/</d:href></d:current-user-principal><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response><d:response><d:href>%s/dav/file/user/</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response></d:multistatus>`, server.URL, server.URL)
 		case "PROPFIND /dav/file/user/":
 			w.Header().Set("Content-Type", "application/xml")
 			fmt.Fprintf(w, `<d:multistatus xmlns:d="DAV:"><d:response><d:href>%s/dav/file/user/</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop><d:displayname>user</d:displayname><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response><d:response><d:href>%s/dav/file/user/note.txt</d:href><d:propstat><d:status>HTTP/1.1 200 OK</d:status><d:prop><d:displayname>note.txt</d:displayname><d:getcontentlength>5</d:getcontentlength><d:getcontenttype>text/plain</d:getcontenttype><d:getetag>e1</d:getetag><d:resourcetype/></d:prop></d:propstat></d:response></d:multistatus>`, server.URL, server.URL)
@@ -30,7 +33,7 @@ func TestListAndReadStayInsideAuthorizedRoot(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client, err := New(Config{Origin: server.URL, BearerToken: "token", Roots: []string{"/dav/file/user/"}, HTTPClient: server.Client()})
+	client, err := New(Config{Origin: server.URL, BearerToken: "token", HTTPClient: server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}

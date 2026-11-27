@@ -66,7 +66,10 @@ type davResponse struct {
 	Props  []struct {
 		Status string `xml:"DAV: status"`
 		Prop   struct {
-			Name         string `xml:"DAV: displayname"`
+			Name             string `xml:"DAV: displayname"`
+			CurrentPrincipal struct {
+				Href string `xml:"DAV: href"`
+			} `xml:"DAV: current-user-principal"`
 			Size         int64  `xml:"DAV: getcontentlength"`
 			Type         string `xml:"DAV: getcontenttype"`
 			ETag         string `xml:"DAV: getetag"`
@@ -82,8 +85,8 @@ func New(config Config) (*Client, error) {
 	if err != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || (origin.Path != "" && origin.Path != "/") {
 		return nil, errors.New("reviewed HTTPS file origin is required")
 	}
-	if config.BearerToken == "" || strings.ContainsAny(config.BearerToken, "\r\n") || len(config.Roots) == 0 {
-		return nil, errors.New("provider credential and authorized roots are required")
+	if config.BearerToken == "" || strings.ContainsAny(config.BearerToken, "\r\n") {
+		return nil, errors.New("provider credential is required")
 	}
 	origin.Path = ""
 	client := &Client{origin: origin, token: config.BearerToken}
@@ -117,6 +120,9 @@ func (c *Client) Roots() []Entry {
 }
 
 func (c *Client) List(ctx context.Context, href string) (ListResult, error) {
+	if err := c.ensureRoots(ctx); err != nil {
+		return ListResult{}, err
+	}
 	target, err := c.authorized(href)
 	if err != nil {
 		return ListResult{}, err
@@ -137,7 +143,6 @@ func (c *Client) List(ctx context.Context, href string) (ListResult, error) {
 	parent := strings.TrimSuffix(target.Path, "/")
 	for _, response := range document.Responses {
 		if response.Status != "" && !strings.Contains(response.Status, " 200 ") {
-			result.Partial = true
 			continue
 		}
 		reference, parseErr := url.Parse(response.Href)
@@ -180,6 +185,9 @@ func (c *Client) List(ctx context.Context, href string) (ListResult, error) {
 }
 
 func (c *Client) Read(ctx context.Context, href string) (ReadResult, error) {
+	if err := c.ensureRoots(ctx); err != nil {
+		return ReadResult{}, err
+	}
 	target, err := c.authorized(href)
 	if err != nil {
 		return ReadResult{}, err
@@ -199,6 +207,66 @@ func (c *Client) Read(ctx context.Context, href string) (ReadResult, error) {
 		return ReadResult{}, errors.New("file exceeds inline text limit")
 	}
 	return ReadResult{Text: string(data), ContentType: mediaType, Bytes: len(data), ETag: headers.Get("ETag")}, nil
+}
+
+func (c *Client) DiscoverRoots(ctx context.Context) ([]Entry, error) {
+	target, _ := c.sameOrigin("/dav/file/")
+	payload := []byte(`<d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/><d:resourcetype/></d:prop></d:propfind>`)
+	raw, _, err := c.request(ctx, "PROPFIND", target, payload, map[string]string{"Depth": "1", "Content-Type": "application/xml"}, maxDAVResponse)
+	if err != nil {
+		return nil, err
+	}
+	var document struct {
+		XMLName   xml.Name      `xml:"DAV: multistatus"`
+		Responses []davResponse `xml:"DAV: response"`
+	}
+	if xml.Unmarshal(raw, &document) != nil {
+		return nil, errors.New("provider returned invalid file collection discovery")
+	}
+	principal := ""
+	for _, response := range document.Responses {
+		resource, parseErr := c.sameOrigin(response.Href)
+		if parseErr != nil || resource.Path != "/dav/file/" {
+			continue
+		}
+		for _, prop := range response.Props {
+			if !strings.Contains(prop.Status, " 200 ") {
+				continue
+			}
+			pal, palErr := c.sameOrigin(prop.Prop.CurrentPrincipal.Href)
+			if palErr == nil && strings.HasPrefix(pal.Path, "/dav/pal/") {
+				candidate := strings.TrimSuffix(strings.TrimPrefix(pal.Path, "/dav/pal/"), "/")
+				if candidate != "" && !strings.Contains(candidate, "/") {
+					principal = candidate
+				}
+			}
+		}
+	}
+	if principal == "" {
+		return nil, errors.New("current DAV principal unavailable")
+	}
+	for _, response := range document.Responses {
+		resource, parseErr := c.sameOrigin(response.Href)
+		if parseErr != nil || strings.TrimSuffix(strings.TrimPrefix(resource.Path, "/dav/file/"), "/") != principal {
+			continue
+		}
+		for _, prop := range response.Props {
+			if strings.Contains(prop.Status, " 200 ") && prop.Prop.ResourceType.Collection != nil {
+				resource.Path = strings.TrimSuffix(resource.Path, "/") + "/"
+				c.roots = []*url.URL{resource}
+				return c.Roots(), nil
+			}
+		}
+	}
+	return nil, errors.New("provider did not expose the current principal file collection")
+}
+
+func (c *Client) ensureRoots(ctx context.Context) error {
+	if len(c.roots) != 0 {
+		return nil
+	}
+	_, err := c.DiscoverRoots(ctx)
+	return err
 }
 
 func (c *Client) authorized(raw string) (*url.URL, error) {

@@ -1,10 +1,10 @@
 package main
 
 import (
-	"crypto/subtle"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/8iops/stalwart-agent-tools/internal/broker"
@@ -15,7 +15,6 @@ import (
 func main() {
 	brokerURL := required("BINDING_BROKER_URL")
 	brokerToken := required("BINDING_BROKER_TOKEN")
-	mcpToken := required("MCP_BEARER_TOKEN")
 	address := os.Getenv("LISTEN_ADDRESS")
 	if address == "" {
 		address = ":8080"
@@ -30,7 +29,7 @@ func main() {
 	}
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return runtime.MCP() }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 1 << 20})
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", authenticate(mcpToken, handler))
+	mux.Handle("/mcp", authenticate(handler))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	server := &http.Server{Addr: address, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
@@ -38,15 +37,15 @@ func main() {
 	log.Fatal(server.ListenAndServe())
 }
 
-func authenticate(token string, next http.Handler) http.Handler {
+func authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		provided := r.Header.Get("Authorization")
-		wanted := "Bearer " + token
-		if len(provided) != len(wanted) || subtle.ConstantTimeCompare([]byte(provided), []byte(wanted)) != 1 {
+		if !strings.HasPrefix(provided, "Bearer ") || len(provided) <= len("Bearer ") || len(provided) > 8199 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r)
+		token := strings.TrimPrefix(provided, "Bearer ")
+		next.ServeHTTP(w, r.WithContext(broker.WithInvocationToken(r.Context(), token)))
 	})
 }
 

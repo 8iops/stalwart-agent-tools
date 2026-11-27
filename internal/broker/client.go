@@ -35,6 +35,12 @@ type resolveRequest struct {
 	RequiredScopes []string `json:"requiredScopes"`
 }
 
+type invocationContextKey struct{}
+
+func WithInvocationToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, invocationContextKey{}, token)
+}
+
 func New(endpoint, workloadToken string, httpClient *http.Client) (*Client, error) {
 	target, err := url.Parse(endpoint)
 	if err != nil || target.Scheme != "https" || target.Host == "" || target.User != nil || target.RawQuery != "" || target.Fragment != "" || target.Path != "/v1/collaboration/resolve" || workloadToken == "" || strings.ContainsAny(workloadToken, "\r\n") {
@@ -65,11 +71,16 @@ func (c *Client) Resolve(ctx context.Context, connectionRef string, requiredScop
 		seen[scope] = true
 	}
 	payload, _ := json.Marshal(resolveRequest{ConnectionRef: connectionRef, RequiredScopes: requiredScopes})
+	invocation, _ := ctx.Value(invocationContextKey{}).(string)
+	if invocation == "" || len(invocation) > 8192 || strings.ContainsAny(invocation, "\r\n") {
+		return Binding{}, errors.New("verified invocation token is required")
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint.String(), bytes.NewReader(payload))
 	if err != nil {
 		return Binding{}, errors.New("build binding broker request")
 	}
 	request.Header.Set("Authorization", "Bearer "+c.workloadToken)
+	request.Header.Set("X-RE8CH-Invocation", "Bearer "+invocation)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	response, err := c.http.Do(request)

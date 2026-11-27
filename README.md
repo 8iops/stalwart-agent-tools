@@ -44,7 +44,8 @@ health endpoints at `/healthz` and `/readyz`. It requires:
 
 - `BINDING_BROKER_URL`: the reviewed HTTPS
   `/v1/collaboration/resolve` endpoint;
-- `BINDING_BROKER_TOKEN`: workload-only broker credential;
+- optional `BINDING_BROKER_TOKEN_FILE`, defaulting to the rotating projected
+  ServiceAccount token at `/var/run/secrets/tokens/stalwart-binding-broker`;
 - optional `LISTEN_ADDRESS`, defaulting to `:8080`.
 
 The MCP bearer is a short-lived, downscoped invocation JWT issued for the

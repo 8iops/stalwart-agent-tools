@@ -14,12 +14,15 @@ import (
 
 func main() {
 	brokerURL := required("BINDING_BROKER_URL")
-	brokerToken := required("BINDING_BROKER_TOKEN")
+	brokerTokenFile := os.Getenv("BINDING_BROKER_TOKEN_FILE")
+	if brokerTokenFile == "" {
+		brokerTokenFile = "/var/run/secrets/tokens/stalwart-binding-broker"
+	}
 	address := os.Getenv("LISTEN_ADDRESS")
 	if address == "" {
 		address = ":8080"
 	}
-	resolver, err := broker.New(brokerURL, brokerToken, nil)
+	resolver, err := broker.NewFromTokenFile(brokerURL, brokerTokenFile, nil)
 	if err != nil {
 		log.Fatal(err)
 	}

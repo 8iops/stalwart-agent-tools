@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +35,33 @@ func TestResolveUsesWorkloadIdentityAndEnforcesScopes(t *testing.T) {
 	}
 	if _, err = client.Resolve(ctx, "collaboration://owned", "files.read"); err == nil || !strings.Contains(err.Error(), "omitted required scope") {
 		t.Fatalf("missing scope accepted: %v", err)
+	}
+}
+
+func TestProjectedWorkloadTokenReloads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("first"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var authorization string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+		fmt.Fprintf(w, `{"connectionRef":"collaboration://owned","origin":"https://mail.example","bearerToken":"provider","accountId":"account","scopes":["mail.read"],"expiresAt":%q}`, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+	}))
+	defer server.Close()
+	client, err := NewFromTokenFile(server.URL+"/v1/collaboration/resolve", path, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithInvocationToken(context.Background(), "invocation")
+	if _, err = client.Resolve(ctx, "collaboration://owned", "mail.read"); err != nil || authorization != "Bearer first" {
+		t.Fatalf("first token failed: %q %v", authorization, err)
+	}
+	if err = os.WriteFile(path, []byte("second"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Resolve(ctx, "collaboration://owned", "mail.read"); err != nil || authorization != "Bearer second" {
+		t.Fatalf("rotated token failed: %q %v", authorization, err)
 	}
 }
 

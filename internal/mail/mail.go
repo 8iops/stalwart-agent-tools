@@ -46,6 +46,16 @@ type QueryResult struct {
 	Messages   []Message
 }
 
+type Mailbox struct {
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	ParentID     string          `json:"parentId"`
+	Role         string          `json:"role"`
+	TotalEmails  uint64          `json:"totalEmails"`
+	UnreadEmails uint64          `json:"unreadEmails"`
+	Rights       json.RawMessage `json:"myRights"`
+}
+
 type Message struct {
 	ID            string
 	ThreadID      string
@@ -188,6 +198,30 @@ func (s *Service) Query(ctx context.Context, options QueryOptions) (QueryResult,
 		return QueryResult{}, err
 	}
 	return QueryResult{QueryState: query.QueryState, Position: query.Position, Total: query.Total, Messages: messages}, nil
+}
+
+func (s *Service) Mailboxes(ctx context.Context) ([]Mailbox, string, error) {
+	raw, err := s.caller.Call(ctx, Capability, "Mailbox/get", map[string]any{"accountId": s.accountID, "properties": []string{"id", "name", "parentId", "role", "totalEmails", "unreadEmails", "myRights"}})
+	if err != nil {
+		return nil, "", fmt.Errorf("list bound mailboxes: %w", err)
+	}
+	var response struct {
+		AccountID string    `json:"accountId"`
+		State     string    `json:"state"`
+		List      []Mailbox `json:"list"`
+		NotFound  []string  `json:"notFound"`
+	}
+	if json.Unmarshal(raw, &response) != nil || response.AccountID != s.accountID || len(response.List) > 100 || len(response.NotFound) != 0 {
+		return nil, "", errors.New("provider returned invalid Mailbox/get result")
+	}
+	seen := map[string]bool{}
+	for _, mailbox := range response.List {
+		if mailbox.ID == "" || seen[mailbox.ID] {
+			return nil, "", errors.New("provider returned invalid mailboxes")
+		}
+		seen[mailbox.ID] = true
+	}
+	return response.List, response.State, nil
 }
 
 func (s *Service) Read(ctx context.Context, id string) (Message, error) {

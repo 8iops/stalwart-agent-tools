@@ -35,6 +35,14 @@ contract digests, and pass/fail conditions. It excludes credentials, message
 content, subjects, recipients, contact data, event descriptions, and file
 names.
 
+Before cutover, run every read probe against both the current tenant-mcp tool
+and this runtime for the same opaque binding. Compare normalized IDs, state,
+counts and truncation flags, not private content. Exercise mail submission and
+calendar response only with dedicated synthetic fixtures and explicit preview
+plans. Verify provider read-back through both paths. Any missing legacy tool,
+scope, authorization flow or normalized field blocks cutover and leaves the
+current route unchanged.
+
 ## Release gate
 
 An artifact is promotable only when:

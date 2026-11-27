@@ -186,3 +186,113 @@ func TestRejectsUnreviewedOriginAndCredentialInjection(t *testing.T) {
 		}
 	}
 }
+
+func TestBatchEncodesReviewedResultReference(t *testing.T) {
+	var server *httptest.Server
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/jmap/session" {
+			fmt.Fprint(w, session(server.URL))
+			return
+		}
+		var envelope struct {
+			Using       []string            `json:"using"`
+			MethodCalls [][]json.RawMessage `json:"methodCalls"`
+		}
+		if json.NewDecoder(r.Body).Decode(&envelope) != nil || len(envelope.MethodCalls) != 2 {
+			t.Fatal("invalid batch request")
+		}
+		var arguments map[string]json.RawMessage
+		if json.Unmarshal(envelope.MethodCalls[1][1], &arguments) != nil {
+			t.Fatal("invalid second call arguments")
+		}
+		var reference map[string]string
+		if json.Unmarshal(arguments["#emailId"], &reference) != nil || reference["resultOf"] != "create" || reference["name"] != "Email/set" || reference["path"] != "/created/draft/id" {
+			t.Fatalf("result reference not encoded safely: %s", arguments["#emailId"])
+		}
+		fmt.Fprint(w, `{"methodResponses":[["Email/set",{"created":{"draft":{"id":"m1"}}},"create"],["EmailSubmission/set",{"created":{"submit":{"id":"s1"}}},"submit"]]}`)
+	})
+	server = httptest.NewTLSServer(handler)
+	defer server.Close()
+	client, err := New(Config{
+		Origin: server.URL, BearerToken: "token", HTTPClient: server.Client(),
+		AllowedMethods: map[string][]string{mailCapability: {"Email/set", "EmailSubmission/set"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := client.CallBatch(context.Background(), []BatchCall{
+		{ID: "create", Capability: mailCapability, Method: "Email/set", Arguments: map[string]any{"accountId": "a"}},
+		{ID: "submit", Capability: mailCapability, Method: "EmailSubmission/set", Arguments: map[string]any{"accountId": "a"}, ResultReferences: []ResultReference{{Argument: "emailId", ResultOf: "create", Name: "Email/set", Path: "/created/draft/id"}}},
+	})
+	if err != nil || len(results) != 2 || results[1].ID != "submit" {
+		t.Fatalf("unexpected batch result: %#v, %v", results, err)
+	}
+}
+
+func TestBatchRejectsInvalidCallsBeforeProvider(t *testing.T) {
+	client, err := New(Config{Origin: "https://mail.example", BearerToken: "token", AllowedMethods: map[string][]string{mailCapability: {"Email/set", "EmailSubmission/set"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.session = &Session{Capabilities: map[string]json.RawMessage{mailCapability: json.RawMessage(`{}`)}, APIURL: "https://mail.example/jmap/"}
+	tests := [][]BatchCall{
+		{},
+		{{ID: "same", Capability: mailCapability, Method: "Email/set", Arguments: map[string]any{}}, {ID: "same", Capability: mailCapability, Method: "Email/set", Arguments: map[string]any{}}},
+		{{ID: "submit", Capability: mailCapability, Method: "EmailSubmission/set", Arguments: map[string]any{}, ResultReferences: []ResultReference{{Argument: "emailId", ResultOf: "later", Name: "Email/set", Path: "/created/x/id"}}}},
+		{{ID: "create", Capability: mailCapability, Method: "Email/set", Arguments: []string{"not-an-object"}}},
+	}
+	for _, calls := range tests {
+		if _, err = client.CallBatch(context.Background(), calls); err == nil {
+			t.Fatalf("invalid batch accepted: %#v", calls)
+		}
+	}
+}
+
+func TestBatchReturnsAttributedPartialMethodError(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/jmap/session" {
+			fmt.Fprint(w, session(server.URL))
+			return
+		}
+		fmt.Fprint(w, `{"methodResponses":[["Email/get",{"list":[]},"read"],["error",{"type":"notFound","description":"missing"},"read2"]]}`)
+	}))
+	defer server.Close()
+	client, err := New(Config{Origin: server.URL, BearerToken: "token", HTTPClient: server.Client(), AllowedMethods: map[string][]string{mailCapability: {"Email/get"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := client.CallBatch(context.Background(), []BatchCall{
+		{ID: "read", Capability: mailCapability, Method: "Email/get", Arguments: map[string]any{}},
+		{ID: "read2", Capability: mailCapability, Method: "Email/get", Arguments: map[string]any{}},
+	})
+	if err != nil || results[0].Error != nil || results[1].Error == nil || results[1].Error.Type != "notFound" {
+		t.Fatalf("partial error was not attributed: %#v, %v", results, err)
+	}
+}
+
+func TestBatchRejectsResponseReordering(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/jmap/session" {
+			fmt.Fprint(w, session(server.URL))
+			return
+		}
+		fmt.Fprint(w, `{"methodResponses":[["Email/get",{},"b"],["Email/get",{},"a"]]}`)
+	}))
+	defer server.Close()
+	client, _ := New(Config{Origin: server.URL, BearerToken: "token", HTTPClient: server.Client(), AllowedMethods: map[string][]string{mailCapability: {"Email/get"}}})
+	if _, err := client.Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := client.CallBatch(context.Background(), []BatchCall{{ID: "a", Capability: mailCapability, Method: "Email/get", Arguments: map[string]any{}}, {ID: "b", Capability: mailCapability, Method: "Email/get", Arguments: map[string]any{}}})
+	if err == nil || !strings.Contains(err.Error(), "order or id") {
+		t.Fatalf("response reordering was accepted: %v", err)
+	}
+}

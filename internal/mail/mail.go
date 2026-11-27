@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/8iops/stalwart-agent-tools/internal/jmap"
 )
 
 const (
@@ -21,7 +23,13 @@ type Caller interface {
 
 type Service struct {
 	caller    Caller
+	batch     BatchCaller
 	accountID string
+	now       func() time.Time
+}
+
+type BatchCaller interface {
+	CallBatch(context.Context, []jmap.BatchCall) ([]jmap.BatchResult, error)
 }
 
 type QueryOptions struct {
@@ -152,7 +160,8 @@ func New(caller Caller, accountID string) (*Service, error) {
 	if caller == nil || strings.TrimSpace(accountID) == "" || strings.ContainsAny(accountID, "\r\n") {
 		return nil, errors.New("bound mail account and provider caller are required")
 	}
-	return &Service{caller: caller, accountID: accountID}, nil
+	batch, _ := caller.(BatchCaller)
+	return &Service{caller: caller, batch: batch, accountID: accountID, now: time.Now}, nil
 }
 
 func (s *Service) Query(ctx context.Context, options QueryOptions) (QueryResult, error) {

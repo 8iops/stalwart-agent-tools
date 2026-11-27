@@ -83,3 +83,23 @@ func TestResolveRejectsUnsafeInputsAndRedirects(t *testing.T) {
 		t.Fatal("missing invocation token accepted")
 	}
 }
+
+func TestNewAcceptsOnlyExactInClusterPlaintextBroker(t *testing.T) {
+	endpoint := "http://tenant-api.tenant-infrastructure.svc.cluster.local/v1/collaboration/resolve"
+	client, err := New(endpoint, "token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := client.endpoint.String(); got != endpoint {
+		t.Fatalf("unexpected endpoint %q", got)
+	}
+	for _, candidate := range []string{
+		"http://tenant-api.tenant-infrastructure.svc/v1/collaboration/resolve",
+		"http://tenant-api.tenant-infrastructure.svc.cluster.local:80/v1/collaboration/resolve",
+		"http://tenant-api.tenant-infrastructure.svc.cluster.local/other",
+	} {
+		if _, err := New(candidate, "token", nil); err == nil {
+			t.Fatalf("accepted unreviewed plaintext endpoint %q", candidate)
+		}
+	}
+}

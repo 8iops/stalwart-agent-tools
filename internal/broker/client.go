@@ -73,8 +73,8 @@ func New(endpoint, workloadToken string, httpClient *http.Client) (*Client, erro
 
 func newClient(endpoint string, httpClient *http.Client) (*Client, error) {
 	target, err := url.Parse(endpoint)
-	if err != nil || target.Scheme != "https" || target.Host == "" || target.User != nil || target.RawQuery != "" || target.Fragment != "" || target.Path != "/v1/collaboration/resolve" {
-		return nil, errors.New("reviewed HTTPS broker endpoint is required")
+	if err != nil || !reviewedBrokerEndpoint(target) {
+		return nil, errors.New("reviewed broker endpoint is required")
 	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Second}
@@ -87,6 +87,19 @@ func newClient(endpoint string, httpClient *http.Client) (*Client, error) {
 		httpClient.Timeout = 10 * time.Second
 	}
 	return &Client{endpoint: target, http: httpClient}, nil
+}
+
+func reviewedBrokerEndpoint(target *url.URL) bool {
+	if target == nil || target.Host == "" || target.User != nil || target.RawQuery != "" || target.Fragment != "" || target.Path != "/v1/collaboration/resolve" {
+		return false
+	}
+	if target.Scheme == "https" {
+		return true
+	}
+	// Workload and invocation tokens authenticate this namespace-local hop.
+	// Keep the plaintext exception exact: it must not become a general HTTP
+	// credential-forwarding path.
+	return target.Scheme == "http" && target.Host == "tenant-api.tenant-infrastructure.svc.cluster.local"
 }
 
 func (c *Client) Resolve(ctx context.Context, connectionRef string, requiredScopes ...string) (Binding, error) {

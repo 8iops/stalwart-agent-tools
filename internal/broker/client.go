@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -15,9 +17,25 @@ import (
 const maxResponse = 64 << 10
 
 type Client struct {
-	endpoint      *url.URL
-	workloadToken string
-	http          *http.Client
+	endpoint          *url.URL
+	workloadToken     string
+	workloadTokenFile string
+	http              *http.Client
+}
+
+func NewFromTokenFile(endpoint, tokenFile string, httpClient *http.Client) (*Client, error) {
+	if !filepath.IsAbs(tokenFile) || strings.ContainsAny(tokenFile, "\x00\r\n") {
+		return nil, errors.New("absolute projected workload token file is required")
+	}
+	client, err := newClient(endpoint, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	client.workloadTokenFile = tokenFile
+	if _, err = client.workloadCredential(); err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 type Binding struct {
@@ -35,10 +53,28 @@ type resolveRequest struct {
 	RequiredScopes []string `json:"requiredScopes"`
 }
 
+type invocationContextKey struct{}
+
+func WithInvocationToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, invocationContextKey{}, token)
+}
+
 func New(endpoint, workloadToken string, httpClient *http.Client) (*Client, error) {
+	client, err := newClient(endpoint, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	if workloadToken == "" || strings.ContainsAny(workloadToken, "\r\n") {
+		return nil, errors.New("workload credential is required")
+	}
+	client.workloadToken = workloadToken
+	return client, nil
+}
+
+func newClient(endpoint string, httpClient *http.Client) (*Client, error) {
 	target, err := url.Parse(endpoint)
-	if err != nil || target.Scheme != "https" || target.Host == "" || target.User != nil || target.RawQuery != "" || target.Fragment != "" || target.Path != "/v1/collaboration/resolve" || workloadToken == "" || strings.ContainsAny(workloadToken, "\r\n") {
-		return nil, errors.New("reviewed HTTPS broker endpoint and workload credential are required")
+	if err != nil || target.Scheme != "https" || target.Host == "" || target.User != nil || target.RawQuery != "" || target.Fragment != "" || target.Path != "/v1/collaboration/resolve" {
+		return nil, errors.New("reviewed HTTPS broker endpoint is required")
 	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Second}
@@ -50,7 +86,7 @@ func New(endpoint, workloadToken string, httpClient *http.Client) (*Client, erro
 	if httpClient.Timeout == 0 {
 		httpClient.Timeout = 10 * time.Second
 	}
-	return &Client{endpoint: target, workloadToken: workloadToken, http: httpClient}, nil
+	return &Client{endpoint: target, http: httpClient}, nil
 }
 
 func (c *Client) Resolve(ctx context.Context, connectionRef string, requiredScopes ...string) (Binding, error) {
@@ -65,11 +101,20 @@ func (c *Client) Resolve(ctx context.Context, connectionRef string, requiredScop
 		seen[scope] = true
 	}
 	payload, _ := json.Marshal(resolveRequest{ConnectionRef: connectionRef, RequiredScopes: requiredScopes})
+	invocation, _ := ctx.Value(invocationContextKey{}).(string)
+	if invocation == "" || len(invocation) > 8192 || strings.ContainsAny(invocation, "\r\n") {
+		return Binding{}, errors.New("verified invocation token is required")
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint.String(), bytes.NewReader(payload))
 	if err != nil {
 		return Binding{}, errors.New("build binding broker request")
 	}
-	request.Header.Set("Authorization", "Bearer "+c.workloadToken)
+	workloadToken, err := c.workloadCredential()
+	if err != nil {
+		return Binding{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+workloadToken)
+	request.Header.Set("X-RE8CH-Invocation", "Bearer "+invocation)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	response, err := c.http.Do(request)
@@ -101,6 +146,21 @@ func (c *Client) Resolve(ctx context.Context, connectionRef string, requiredScop
 		}
 	}
 	return binding, nil
+}
+
+func (c *Client) workloadCredential() (string, error) {
+	if c.workloadTokenFile == "" {
+		return c.workloadToken, nil
+	}
+	raw, err := os.ReadFile(c.workloadTokenFile)
+	if err != nil || len(raw) == 0 || len(raw) > 16384 {
+		return "", errors.New("projected workload credential is unavailable")
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" || strings.ContainsAny(token, "\r\n") {
+		return "", errors.New("projected workload credential is invalid")
+	}
+	return token, nil
 }
 
 func validRef(ref string) bool {

@@ -238,7 +238,11 @@ func (s *Server) filesList(ctx context.Context, _ *mcp.CallToolRequest, in fileI
 		return nil, nil, err
 	}
 	if in.Href == "" {
-		return nil, map[string]any{"items": client.Roots(), "untrustedContent": true}, nil
+		items := client.Roots()
+		if len(items) == 0 {
+			items, err = client.DiscoverRoots(ctx)
+		}
+		return nil, map[string]any{"items": items, "untrustedContent": true}, err
 	}
 	value, err := client.List(ctx, in.Href)
 	return nil, value, err

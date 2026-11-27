@@ -22,7 +22,7 @@
       "surface": "user",
       "scope": "mail.send",
       "mode": "write",
-      "providerMethods": ["Identity/get", "Email/set", "EmailSubmission/set"],
+      "providerMethods": ["Identity/get", "Mailbox/get", "Email/get", "Email/set", "EmailSubmission/set", "EmailSubmission/get"],
       "requires": ["binding", "resource-ownership", "preview", "expected-state", "idempotency", "read-back"],
       "outcome": "provider-submitted"
     },
